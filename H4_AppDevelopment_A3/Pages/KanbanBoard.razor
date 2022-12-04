@@ -1,0 +1,343 @@
+﻿@using Microsoft.AspNetCore.Components
+@using System.ComponentModel.DataAnnotations
+@using System.Text.Json;
+@using System.Text.Json.Serialization;
+@using System.Diagnostics;
+@using System.Net.Http;
+
+@inject HttpClient Http
+@inject IDialogService DialogService
+@inject IJSRuntime JS
+
+@page "/kanban"
+
+<PageTitle>Kanban Test</PageTitle>
+<div>
+    <div>
+        <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Filled.Cancel" Class="cursor-pointer" OnClick="ClearPage">Clear Board</MudButton>
+        <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Filled.Save" Class="cursor-pointer" OnClick="SavePageLocal">Save Locally</MudButton>
+        <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Filled.GetApp" Class="cursor-pointer" OnClick="GetPageLocal">Get From Local Storage</MudButton>
+        <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Filled.CloudDownload" Class="cursor-pointer" OnClick="GetPageCloud">Get From Cloud</MudButton>
+        <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Filled.CloudUpload" Class="cursor-pointer" OnClick="SavePageCloud">Save To Cloud</MudButton>
+    </div>
+
+    <MudDropContainer T="KanbanTaskItem" @ref="_dropContainer" Items="@_tasks" ItemsSelector="@((item,column) => item.Status == column)" ItemDropped="TaskUpdated" Class="d-flex flex-row">
+        <ChildContent>
+            @foreach (var item in _sections)
+            {
+
+                <MudPaper Elevation="0" Width="224px" MinHeight="400px" Class="pa-4 ma-4 d-flex flex-column mud-background-gray rounded-lg">
+                    <div>
+                        <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Outlined.Delete" Class="cursor-pointer" OnClick="@( () => DeleteSection(item))">Delete</MudButton>
+                        <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Rounded.Edit" Class="cursor-pointer" OnClick="@( () => RenameSection(item))">Rename</MudButton>
+                    </div>
+
+                    <MudToolBar DisableGutters="true">
+                        <MudText Typo="Typo.subtitle1"><b>@item.Name</b></MudText>
+                        <MudSpacer />
+                    </MudToolBar>
+                    <MudDropZone T="KanbanTaskItem" Identifier="@item.Name" Class="mud-height-full" />
+                    @if (item.NewTaskOpen)
+                    {
+                        <MudPaper Elevation="25" Class="pa-2 rounded-lg">
+                            <MudTextField @bind-Value="item.NewTaskName" Placeholder="New Task" DisableUnderLine="true" Margin="Margin.Dense" Class="mx-2 mt-n2"></MudTextField>
+                            <MudButton OnClick="@(() => AddTask(item))" Size="Size.Small" Color="Color.Primary" FullWidth="true">Add Task</MudButton>
+                        </MudPaper>
+                    }
+                    else
+                    {
+                        <MudButton OnClick="@(() => item.NewTaskOpen = !item.NewTaskOpen)" StartIcon="@Icons.Filled.Add" FullWidth="true" Class="rounded-lg py-2">Add Task</MudButton>
+                    }
+                </MudPaper>
+            }
+            <MudPaper Class="pa-4" Elevation="0" Width="224px">
+                @if (_addSectionOpen)
+                {
+                    <MudPaper Elevation="0" Width="224px" Class="pa-4 d-flex flex-column mud-background-gray rounded-lg">
+                        <EditForm Model="@newSectionModel" OnValidSubmit="OnValidSectionSubmit">
+                            <DataAnnotationsValidator />
+                            <MudTextField @bind-Value="newSectionModel.Name" For="@(() => newSectionModel.Name)" Placeholder="New Section" DisableUnderLine="true"></MudTextField>
+                            <MudButton ButtonType="ButtonType.Submit" Size="Size.Small" Color="Color.Primary" FullWidth="true">Add Section</MudButton>
+                        </EditForm>
+                    </MudPaper>
+                }
+                else
+                {
+                    <MudButton OnClick="OpenAddNewSection" Variant="Variant.Outlined" StartIcon="@Icons.Filled.Add" Color="Color.Primary" Class="rounded-lg py-2" FullWidth="true">Add Section</MudButton>
+                }
+            </MudPaper>
+        </ChildContent>
+        <ItemRenderer>
+            <MudPaper Elevation="25" Class="pa-4 rounded-lg my-3">
+                <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Outlined.Delete" Class="cursor-pointer" DisableRipple="true" OnClick="@( () => DeleteTask(context))">Delete</MudButton>
+                <MudButton Size="Size.Small" Color="Color.Default" StartIcon="@Icons.Rounded.Edit" Class="cursor-pointer" DisableRipple="true">Edit</MudButton>
+                @context.Name
+            </MudPaper>
+        </ItemRenderer>
+    </MudDropContainer>
+</div>
+
+
+<MudTextField T="string" Counter="15" MaxLength="15" HelperText="Section name can be 15 characters" Immediate="true" Validation="@(new Func<string, IEnumerable<string>>(MaxCharacters))" Label="New name" Variant="Variant.Text" />
+
+
+<MudDialog>
+    <DialogContent>
+        <div class="d-flex flex-column py-1">
+            <MudButton OnClick="ChangeTitle">Change Title</MudButton>
+            <MudButton OnClick="ToggleCloseButton">Toggle Close Button</MudButton>
+            <MudButton OnClick="ToggleFullWidth">Toggle Full Width</MudButton>
+            <MudButton OnClick="ToggleHeader">Toggle Header</MudButton>
+        </div>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" OnClick="Close">Ok</MudButton>
+    </DialogActions>
+</MudDialog>
+
+
+
+@code {
+    private IEnumerable<string> MaxCharacters(string ch)
+    {
+        if (!string.IsNullOrEmpty(ch) && 15 < ch?.Length)
+            yield return "Max 15 characters";
+    }
+    // Add max length to new task field
+    // Add delete icon to tasks
+    // Add appointed user to tasks
+
+
+    [CascadingParameter] MudDialogInstance MudDialog { get; set; }
+
+    void Close() => MudDialog.Close(DialogResult.Ok(true));
+
+    private MudDropContainer<KanbanTaskItem>? _dropContainer;
+
+    private bool _addSectionOpen;
+    /* handling board events */
+    private void TaskUpdated(MudItemDropInfo<KanbanTaskItem> info)
+    {
+        info.Item.Status = info.DropzoneIdentifier;
+    }
+
+    // These lists are for populating the board
+    private List<KanbanSection> _sections = new List<KanbanSection>();
+    private List<KanbanTaskItem> _tasks = new List<KanbanTaskItem>();
+
+    KanBanNewForm newSectionModel = new KanBanNewForm();
+
+    public class KanBanNewForm
+    {
+        [Required]
+        [StringLength(15, ErrorMessage = "Name length can't be more than 15.")]
+        public string Name { get; set; }
+    }
+
+    private void OnValidSectionSubmit(EditContext context)
+    {
+        KanbanSection newKanbanSection = new KanbanSection(newSectionModel.Name, false, String.Empty);
+        _sections.Add(newKanbanSection);
+        newSectionModel.Name = string.Empty;
+        _addSectionOpen = false;
+    }
+
+    private void OpenAddNewSection()
+    {
+        _addSectionOpen = true;
+    }
+
+    private void AddTask(KanbanSection section)
+    {
+        _tasks.Add(new KanbanTaskItem(section.NewTaskName, section.Name));
+        section.NewTaskName = string.Empty;
+        section.NewTaskOpen = false;
+        _dropContainer.Refresh();
+    }
+
+    private async void DeleteSection(KanbanSection section)
+    {
+        bool? result = await DialogService.ShowMessageBox("Warning", "Deleting can not be undone!", yesText: "Delete!", cancelText: "Cancel");
+        StateHasChanged();
+
+        if (result == true)
+        {
+            if (_sections.Count == 1)
+            {
+                _tasks.Clear();
+                _sections.Clear();
+            }
+            else
+            {
+                int newIndex = _sections.IndexOf(section) - 1;
+                if (newIndex < 0)
+                {
+                    newIndex = 0;
+                }
+
+                _sections.Remove(section);
+
+                var tasks = _tasks.Where(x => x.Status == section.Name);
+                foreach (var item in tasks)
+                {
+                    item.Status = _sections[newIndex].Name;
+                }
+            }
+        }
+    }
+
+    private void RenameSection(KanbanSection section)
+    {
+        DialogService.Show<MudDialog>("Options Dialog");
+    }
+
+    private async void DeleteTask(KanbanTaskItem task)
+    {
+        bool? result = await DialogService.ShowMessageBox("Warning", "Deleting can not be undone!", yesText: "Delete!", cancelText: "Cancel");
+        StateHasChanged();
+
+        if (result == true)
+        {
+            if (_tasks.Count == 1)
+            {
+                _tasks.Clear();
+            }
+            else
+            {
+                int newIndex = _tasks.IndexOf(task) - 1;
+                if (newIndex < 0)
+                {
+                    newIndex = 0;
+                }
+
+                _tasks.Remove(task);
+
+                /*var tasks = _tasks.Where(x => x.Status == section.Name);
+                foreach (var item in tasks)
+                    {
+                    item.Status = _sections[newIndex].Name;
+                }*/
+            }
+        }
+
+    }
+
+
+
+    void ChangeTitle()
+    {
+        MudDialog.SetTitle("Current time is: " + DateTime.Now);
+    }
+
+    void ToggleCloseButton()
+    {
+        MudDialog.Options.CloseButton = !(MudDialog.Options.CloseButton ?? false);
+        MudDialog.SetOptions(MudDialog.Options);
+    }
+
+    void ToggleFullWidth()
+    {
+        MudDialog.Options.FullWidth = !(MudDialog.Options.FullWidth ?? true);
+        MudDialog.SetOptions(MudDialog.Options);
+    }
+
+    void ToggleHeader()
+    {
+        MudDialog.Options.NoHeader = !(MudDialog.Options.NoHeader ?? false);
+        MudDialog.SetOptions(MudDialog.Options);
+    }
+
+    private void ClearPage()
+    {
+        _sections.Clear();
+        _tasks.Clear();
+    }
+
+    private async Task SavePageLocal()
+    {
+        string jsonStringSection = JsonSerializer.Serialize(_sections);
+        string jsonStringTask = JsonSerializer.Serialize(_tasks);
+        await JS.InvokeVoidAsync("localStorage.setItem", "sections", jsonStringSection);
+        await JS.InvokeVoidAsync("localStorage.setItem", "tasks", jsonStringTask);
+    }
+
+    private async Task GetPageLocal()
+    {
+        ClearPage();
+
+        string? jsonSections = await JS.InvokeAsync<string>("localStorage.getItem", "sections");
+        string? jsonTasks = await JS.InvokeAsync<string>("localStorage.getItem", "tasks");
+
+        KanbanSection[]? kanbanSections = JsonSerializer.Deserialize<KanbanSection[]>(jsonSections);
+        KanbanTaskItem[]? kanbanTaskItems = JsonSerializer.Deserialize<KanbanTaskItem[]>(jsonTasks);
+
+        PopulateBoard(kanbanSections, kanbanTaskItems);        
+    }
+
+    private async Task GetPageCloud()
+    {
+        ClearPage();
+
+        KanbanSection[]? kanbanSections = await Http.GetFromJsonAsync<KanbanSection[]>(@"http://10.108.169.56:7047/kanbansection/get");
+        KanbanTaskItem[]? kanbanTaskItems = await Http.GetFromJsonAsync<KanbanTaskItem[]>(@"http://10.108.169.56:7047/kanbantaskitem/get");
+
+        PopulateBoard(kanbanSections, kanbanTaskItems);
+    }
+
+    private async Task SavePageCloud()
+    {
+        string jsonStringSection = JsonSerializer.Serialize(_sections);
+
+        if (jsonStringSection != null)
+        {
+            await Http.PostAsJsonAsync(@"http://10.108.169.56:7047/kanbantasksection/postsection", jsonStringSection);
+        }
+
+        /*Tester(_sections);
+        foreach (var item in _sections)
+        {
+        Debug.Write(item.Name);
+
+        string fileName = "sample-data/kanban_section.json";
+        string jsonString = JsonSerializer.Serialize(newKanbanSection);
+        File.WriteAllText(fileName, jsonString);
+        }
+        string jsonString = "";
+        string path = AppDomain.CurrentDomain.BaseDirectory + @"wwwroot\sample-data\kanban_section.json";
+
+    jsonString = JsonSerializer.Serialize(_sections);
+
+            if (File.Exists(path))
+            {
+            File.WriteAllText(path, jsonString);
+
+        }
+        PostJsonHttpClient("test", Http);
+    */
+        
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+       await GetPageLocal();
+    }
+
+    private async void PopulateBoard(KanbanSection[]? kanbanSections, KanbanTaskItem[]? kanbanTaskItems)
+    {
+        if (kanbanSections != null)
+        {
+            foreach (var item in kanbanSections)
+            {
+                _sections.Add(item);
+            }
+        }
+
+        if (kanbanTaskItems != null)
+        {
+            foreach (var item in kanbanTaskItems)
+            {
+                _tasks.Add(item);
+            }
+        }        
+    }
+}
